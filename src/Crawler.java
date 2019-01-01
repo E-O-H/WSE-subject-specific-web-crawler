@@ -64,7 +64,7 @@ public class Crawler {
   private boolean printHelp = false;
 
   /**
-   * Class to store a URL and its score. Constructor scores the URL provided.
+   * Class to store a URL and its score. 
    * 
    * @author Chenyang Tang
    *
@@ -72,29 +72,17 @@ public class Crawler {
   private static class ScoredUrl {
     
     public String url;
-    public int score = 0;
+    public int score;
     
     /**
-     * Constructor with default score for manually added URL that does not have a page
-     * in which it resides. For example, used for the starting URL.
+     * Constructor
      * 
      * @param url URL string
+     * @param score score
      */
-    public ScoredUrl(String url) {
+    public ScoredUrl(String url, int score) {
       this.url = url;
-    }
-    
-    /**
-     * Constructor that calculates score for a URL
-     * Used for crawled URLs.
-     * 
-     * @param url URL string
-     * @param queryTerms list of query terms to score the URL
-     * @param page the page where the URL resides
-     */
-    public ScoredUrl(String url, String[] queryTerms, Document page) {
-      this.url = url;
-      this.score = scoreUrl(url, queryTerms, page);
+      this.score = score;
     }
     
     /*
@@ -116,26 +104,26 @@ public class Crawler {
         return false;
       return true;
     }
-    
-    /**
-     * Calculate the score of a URL according to given query terms
-     * 
-     * @param url URL
-     * @param queryTerms list of query terms to score the URL
-     * @param page the page where the URL resides
-     * @return the score
-     */
-    public static int scoreUrl(String url, String[] queryTerms, Document page) {
-      
-      
-      return 0;
-    }
   }
   
-  private int startCrawl() {
+  /**
+   * Calculate the score of a URL according to given query terms
+   * 
+   * @param url URL
+   * @param queryTerms list of query terms to score the URL
+   * @param page the page where the URL resides
+   * @return the score
+   */
+  public static int scoreUrl(String url, String[] queryTerms, Document page) {
+    
+    
+    return 0;
+  }
+  
+  private void startCrawl() {
     Queue<ScoredUrl> urlQueue = new PriorityQueue<ScoredUrl>(10, (a, b) -> b.score - a.score);
     Set<String> visited = new HashSet<String>();
-    urlQueue.offer(new ScoredUrl(startingUrl));
+    urlQueue.offer(new ScoredUrl(startingUrl, 0));
     while (!urlQueue.isEmpty() && visited.size() < maxPage) {
       // Retrieve a page from the priority queue
       ScoredUrl scoredUrl = urlQueue.poll();
@@ -152,35 +140,24 @@ public class Crawler {
       
       // get all links from the retrieved page
       Elements links = page.select("a[href]");
-      links.iterator().forEachRemaining( link -> {
+      links.forEach( link -> {
         String linkUrl = link.attr("abs:href"); // Note the "abs:" attribute prefix used to automatically 
                                                 // resolve an absolute URL if the link is a relative URL
         if (visited.contains(linkUrl)) return;
-        if (urlQueue.contains(new ScoredUrl(linkUrl))) {
-          
+        int newScore = scoreUrl(linkUrl, queryTerms, page);
+        if (urlQueue.contains(new ScoredUrl(linkUrl, 0))) {
+          urlQueue.forEach( existing -> {
+            if (linkUrl.equals(existing.url)) {
+              existing.score += newScore;
+              if (trace) System.out.println("Adding " + newScore + " to score of " + linkUrl);
+            }
+          } );
+        } else {
+          urlQueue.offer(new ScoredUrl(linkUrl, newScore));
+          if (trace) System.out.println("Adding to queue: " + linkUrl + " with score " + newScore);
         }
-        
-        
       } );
-
-      
     }
-    /*for (each link M in Links) {
-                 S = Score(M,P,Query);
-                 U = URL of M;
-                 if (U is not in Seen) {
-                    if (U is not in Q) {
-                         add U to Q with score S;
-                         if (Debug) println("Adding to queue: ", U 
-                                            " with score " S);
-                           }
-                      else { 
-                         add S to the score of U in Q;
-                         if (Debug) println("Adding " S " to score of " U);
-                  } endif
-              }  endfor
-           }  endif
-      } until ((Q is empty) or Size(Seen) > MaxPages);  */
   }
   
   /**

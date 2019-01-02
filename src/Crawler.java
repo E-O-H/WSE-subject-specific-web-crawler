@@ -10,12 +10,17 @@ import java.nio.file.Paths;
 import java.util.Queue;
 import java.util.Set;
 import java.util.StringTokenizer;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
+import java.util.ListIterator;
 import java.util.PriorityQueue;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.nodes.Node;
+import org.jsoup.nodes.TextNode;
 import org.jsoup.select.Elements;
 
 import org.kohsuke.args4j.CmdLineException;
@@ -70,12 +75,13 @@ public class Crawler {
       usage = "Use this flag to print out trace details.")
   private boolean trace = false;
   
+  @Option(name = "-DEBUG", aliases = "-D", required = false, 
+      usage = "Use this flag to print out even more debug details.")
+  private boolean DEBUG = false;
+  
   @Option(name = "-help", aliases = "-h", required = false, 
           usage = "Print this help text.")
   private boolean printHelp = false;
-  
-  
-  private final boolean DEBUG = false; // Debug flag
 
   /**
    * Class to store a URL and its score. 
@@ -121,49 +127,143 @@ public class Crawler {
   }
   
   /**
-   * Calculate the score of a URL with respect to a list of given query terms
+   * Calculate the score of a link with respect to a list of given query terms
    * as well as the page context the URL is in.
    * 
-   * @param i the index of the URL in all hrefs in the page
+   * @param link the DOM element node of the link
    * @param page the page where the URL resides
-   * @param queryTerms list of query terms to score the URL
+   * @param queryTerms list of query terms to score the link
    * @return the score
    */
-  public static int scoreUrl(int i, Document page, String[] queryTerms) {
+  public int scoreLink(Element link, Document page, String[] queryTerms) {
+    final int CONTEXT_SIZE = 5;      // Number of words around the link to check for context score
+    
+    final int ANCHOR_SCORE = 50;     // anchor score coefficient
+    final int URL_SCORE = 40;        // URL score coefficient
+    final int CONTEXT_SCORE = 4;     // context score coefficient
+    final int PAGE_SCORE = 1;        // page score coefficient
+    
     if (queryTerms == null || queryTerms.length == 0) 
       return 0;
     
-    Elements links = page.select("a[href]"); // get a list of all <a> tags with href attribute
-    Element ele = links.get(i);              // get the i-th tag in the above list
-    String url = ele.attr("href");           // get the href attribute of the tag (i.e. the URL)
-    String anchor = ele.text();              // get the text of the tag (i.e. the anchor text)
+    // Normalize query terms to lower case
+    for (int i = 0; i < queryTerms.length; ++i) {
+      queryTerms[i] = queryTerms[i].toLowerCase();
+    }
     
-    final int ANCHOR_SCORE = 50;
-    final int URL_SCORE = 40;
-    final int CONTEXT_SCORE = 4;
-    final int PAGE_SCORE = 1;
+    String url = link.attr("href").toLowerCase();  // Get the href attribute of the tag (i.e. the URL)
+    String anchor = link.text().toLowerCase();     // Get the text of the tag (i.e. the anchor text)
     
-    int k = 0;
+    // Check for anchor score
+    int count = 0;
     for (String term : queryTerms) {
       if(anchor.contains(term)) {
-        k += 1;
+        count += 1;
+      }
+    }
+    if (count > 0) {
+      return count * ANCHOR_SCORE;
+    }
+    
+    // Check for URL score
+    for (String term : queryTerms) {
+      if(url.contains(term)) {
+        return URL_SCORE;
       }
     }
     
-    /*
-     * Score(M,P,Query) {
-  if (Query == null) then return 0;
-  if (K > 0 of the words in Query are substrings of M.anchor)  
-    return K*50;
-  if (any word in Query is a substring of M.URL)               
-    return 40;
-  U = set of different words in Query that occurs in P within five
-      words of M (not counting HTML tags)
-  V = set of different words in Query that occur in P;
-  return 4*|U| + |V-U|
-}
-     */
-    return 0;
+    List<Node> allNodes = page.childNodes();  // Get all DOM nodes in the page
+    
+    // Find the position of the link node in DOM
+    int pos = 0;
+    for ( ; pos < allNodes.size(); ++pos) {
+      if (allNodes.get(pos).equals(link)) {
+        if (DEBUG) System.out.println("Found link at the " + pos + "th DOM node.");
+        break;
+      }
+    }
+    
+    // Check for context score
+    int contextCount = 0;
+    LOOP_TERMS:
+    for (int i = 0; i < queryTerms.length; ++i) {
+      // Skip same terms
+      for (int j = 0; j < i; ++j) {
+        if (queryTerms[i] == queryTerms[j])
+          continue LOOP_TERMS;
+      }
+      
+      // Check for context words after the link
+      int distance = 1;
+      ListIterator<Node> itForward = allNodes.listIterator(pos);
+      LOOP_NODES:
+      while (itForward.hasNext() && distance <= CONTEXT_SIZE) {
+        Node node = itForward.next();
+        if (! (node instanceof TextNode)) {
+          continue LOOP_NODES;
+        }
+        StringTokenizer st = new StringTokenizer(((TextNode) node).text().toLowerCase());
+        while (st.hasMoreTokens() && distance <= CONTEXT_SIZE) {
+          if (queryTerms[i].equals(st.nextToken())) {
+            contextCount += 1;
+            if (DEBUG) System.out.println(
+                "Found term " + queryTerms[i] + 
+                " at a distance of " + distance + " words after the link.");
+            continue LOOP_TERMS;
+          }
+          distance += 1;
+        } // LOOP_WORDS
+      } // LOOP_NODES
+      
+      // Check for context words before the link
+      distance = 1;
+      ListIterator<Node> itBackward = allNodes.listIterator(pos);
+      LOOP_NODES:
+      while (itBackward.hasPrevious() && distance <= CONTEXT_SIZE) {
+        Node node = itBackward.previous();
+        if (! (node instanceof TextNode)) {
+          continue LOOP_NODES;
+        }
+        StringTokenizer st = new StringTokenizer(((TextNode) node).text().toLowerCase());
+        List<String> words = new ArrayList<String>();
+        while (st.hasMoreTokens()) {
+          words.add(st.nextToken());
+        }
+        for (int k = words.size() - 1; k >= 0 && distance <= CONTEXT_SIZE; --k) {
+          if (queryTerms[i].equals(words.get(k))) {
+            contextCount += 1;
+            if (DEBUG) System.out.println(
+                "Found term " + queryTerms[i] + 
+                " at a distance of " + distance + " words before the link.");
+            continue LOOP_TERMS;
+          }
+          distance += 1;
+        } // LOOP_WORDS
+      } // LOOP_NODES
+    } // LOOP_TERMS
+    
+    // Check for page score
+    int pageCount = 0;
+    LOOP_TERMS:
+    for (int i = 0; i < queryTerms.length; ++i) {
+      // Skip same terms
+      for (int j = 0; j < i; ++j) {
+        if (queryTerms[i] == queryTerms[j])
+          continue LOOP_TERMS;
+      }
+      
+      StringTokenizer st = new StringTokenizer(page.text().toLowerCase());
+      while (st.hasMoreTokens()) {
+        if (queryTerms[i].equals(st.nextToken())) {
+          pageCount += 1;
+          if (DEBUG) System.out.println(
+              "Found term " + queryTerms[i] + " in page.");
+          continue LOOP_TERMS;
+        }
+      } // LOOP_WORDS
+    } // LOOP_TERMS
+    
+    return contextCount * (CONTEXT_SCORE - 1) + pageCount * PAGE_SCORE;
   }
   
   private void startCrawl() {
@@ -191,25 +291,34 @@ public class Crawler {
       visited.add(scoredUrl.url);
       if (visited.size() >= maxPage) break;
       
-      // get all links from the retrieved page
+      // Get all links in the retrieved page
       Elements links = page.select("a[href]");
-      for (int i = 0; i < links.size(); ++i) {
-        String linkUrl = links.get(i).attr("abs:href"); // The "abs:" attribute prefix is used to automatically 
-        // resolve an absolute URL if the link is a relative URL
+      
+      links.forEach( link -> {
+        String linkUrl = link.attr("abs:href"); // The "abs:" attribute prefix is used to automatically 
+                                                // resolve an absolute URL if the link is a relative URL
         if (visited.contains(linkUrl)) return;
-        int newScore = scoreUrl(i, page, queryTerms);
+        
+        // Score the link
+        if (DEBUG) System.out.println("Scoring link " + linkUrl + " in page " + scoredUrl.url);
+        int newScore = scoreLink(link, page, queryTerms);
+        
         if (urlQueue.contains(new ScoredUrl(linkUrl, 0))) {
-        urlQueue.forEach( existing -> {
-        if (linkUrl.equals(existing.url)) {
-        existing.score += newScore;
-        if (trace) System.out.println("Adding " + newScore + " to score of " + linkUrl);
-        }
-        } );
+          // URL already exists in queue.
+          // Find the existing URL in queue and add to its score.
+          urlQueue.forEach( existing -> {
+            if (linkUrl.equals(existing.url)) {
+              existing.score += newScore;
+              if (trace) System.out.println("Adding " + newScore + " to score of " + linkUrl);
+            }
+          } );
         } else {
-        urlQueue.offer(new ScoredUrl(linkUrl, newScore));
-        if (trace) System.out.println("Adding to queue: " + linkUrl + " with score " + newScore);
+          // URL not already in queue.
+          // Add the URL to queue.
+          urlQueue.offer(new ScoredUrl(linkUrl, newScore));
+          if (trace) System.out.println("Adding to queue: " + linkUrl + " with score " + newScore);
         }
-      } // for-loop
+      } ); // for each link
     } // while-loop (crawler loop)
   }
   
@@ -254,6 +363,7 @@ public class Crawler {
     } catch (IOException e) {
       System.out.println("Write to disk failed: " + finalPath.toString());
     }
+    
     return page;
   }
   
@@ -374,6 +484,7 @@ public class Crawler {
     status = crawler.parseArgs(args);
     if (status != 0) System.exit(status);
     crawler.startCrawl();
+    
   }
 
 }

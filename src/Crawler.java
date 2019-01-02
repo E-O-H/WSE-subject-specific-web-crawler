@@ -5,7 +5,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Queue;
@@ -16,6 +15,7 @@ import java.util.PriorityQueue;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import org.kohsuke.args4j.CmdLineException;
@@ -121,16 +121,48 @@ public class Crawler {
   }
   
   /**
-   * Calculate the score of a URL according to given query terms
+   * Calculate the score of a URL with respect to a list of given query terms
+   * as well as the page context the URL is in.
    * 
-   * @param url URL
-   * @param queryTerms list of query terms to score the URL
+   * @param i the index of the URL in all hrefs in the page
    * @param page the page where the URL resides
+   * @param queryTerms list of query terms to score the URL
    * @return the score
    */
-  public static int scoreUrl(String url, String[] queryTerms, Document page) {
+  public static int scoreUrl(int i, Document page, String[] queryTerms) {
+    if (queryTerms == null || queryTerms.length == 0) 
+      return 0;
     
+    Elements links = page.select("a[href]"); // get a list of all <a> tags with href attribute
+    Element ele = links.get(i);              // get the i-th tag in the above list
+    String url = ele.attr("href");           // get the href attribute of the tag (i.e. the URL)
+    String anchor = ele.text();              // get the text of the tag (i.e. the anchor text)
     
+    final int ANCHOR_SCORE = 50;
+    final int URL_SCORE = 40;
+    final int CONTEXT_SCORE = 4;
+    final int PAGE_SCORE = 1;
+    
+    int k = 0;
+    for (String term : queryTerms) {
+      if(anchor.contains(term)) {
+        k += 1;
+      }
+    }
+    
+    /*
+     * Score(M,P,Query) {
+  if (Query == null) then return 0;
+  if (K > 0 of the words in Query are substrings of M.anchor)  
+    return K*50;
+  if (any word in Query is a substring of M.URL)               
+    return 40;
+  U = set of different words in Query that occurs in P within five
+      words of M (not counting HTML tags)
+  V = set of different words in Query that occur in P;
+  return 4*|U| + |V-U|
+}
+     */
     return 0;
   }
   
@@ -161,24 +193,24 @@ public class Crawler {
       
       // get all links from the retrieved page
       Elements links = page.select("a[href]");
-      links.forEach( link -> {
-        String linkUrl = link.attr("abs:href"); // The "abs:" attribute prefix is used to automatically 
-                                                // resolve an absolute URL if the link is a relative URL
+      for (int i = 0; i < links.size(); ++i) {
+        String linkUrl = links.get(i).attr("abs:href"); // The "abs:" attribute prefix is used to automatically 
+        // resolve an absolute URL if the link is a relative URL
         if (visited.contains(linkUrl)) return;
-        int newScore = scoreUrl(linkUrl, queryTerms, page);
+        int newScore = scoreUrl(i, page, queryTerms);
         if (urlQueue.contains(new ScoredUrl(linkUrl, 0))) {
-          urlQueue.forEach( existing -> {
-            if (linkUrl.equals(existing.url)) {
-              existing.score += newScore;
-              if (trace) System.out.println("Adding " + newScore + " to score of " + linkUrl);
-            }
-          } );
-        } else {
-          urlQueue.offer(new ScoredUrl(linkUrl, newScore));
-          if (trace) System.out.println("Adding to queue: " + linkUrl + " with score " + newScore);
+        urlQueue.forEach( existing -> {
+        if (linkUrl.equals(existing.url)) {
+        existing.score += newScore;
+        if (trace) System.out.println("Adding " + newScore + " to score of " + linkUrl);
         }
-      } );
-    }
+        } );
+        } else {
+        urlQueue.offer(new ScoredUrl(linkUrl, newScore));
+        if (trace) System.out.println("Adding to queue: " + linkUrl + " with score " + newScore);
+        }
+      } // for-loop
+    } // while-loop (crawler loop)
   }
   
   /**
@@ -244,7 +276,7 @@ public class Crawler {
   /**
    * Test if a URL allows robot according to the site's "robots.txt" file.
    * 
-   * This method is a slightly modified version of Mr. Davis's code at 
+   * This method is modified from Mr. Davis's code at 
    * https://cs.nyu.edu/courses/spring16/CSCI-GA.2580-001/WebCrawler.java.txt
    * 
    * @param url URL to test
@@ -261,7 +293,7 @@ public class Crawler {
     
     // form URL of the robots.txt file
     String strHost = url.getHost();
-    String strRobot = "http://" + strHost + "/robots.txt";
+    String strRobot = "https://" + strHost + "/robots.txt";
     URL urlRobot;
     try { 
       urlRobot = new URL(strRobot);
@@ -272,18 +304,15 @@ public class Crawler {
 
     if (DEBUG) System.out.println("Checking robot protocol " + 
                                    urlRobot.toString());
-    String strCommands;
+    String strCommands = new String();
     try (InputStream urlRobotStream = urlRobot.openStream()) {
       // read in entire file
       byte b[] = new byte[1000];
       int numRead = urlRobotStream.read(b);
-      strCommands = new String(b, 0, numRead);
       while (numRead != -1) {
+        String newCommands = new String(b, 0, numRead);
+        strCommands += newCommands;
         numRead = urlRobotStream.read(b);
-        if (numRead != -1) {
-          String newCommands = new String(b, 0, numRead);
-          strCommands += newCommands;
-        }
       }
     } catch (IOException e) {
         // if there is no robots.txt file, it is OK to search

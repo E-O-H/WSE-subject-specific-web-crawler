@@ -79,6 +79,15 @@ public class Crawler {
       usage = "Use this flag to print out even more debug details.")
   private boolean DEBUG = false;
   
+  @Option(name = "-ROBOTSAFE_DEBUG", aliases = "-RD", required = false, 
+      usage = "Use this flag to print out disallowed paths in robots.txt.")
+  private boolean ROBOTSAFE_DEBUG = false;
+  
+  @Option(name = "-token-delim", aliases = "-td", required = false, 
+      usage = "Tokenization delimiters. "
+               + "Default is \" \\t\\n\\r\\f,./<>?;:'\\\"[]{}\\|`~!@#$%^&*()_+-=\".")
+  private String TOKEN_DELIM = " \t\n\r\f,./<>?;:'\"[]{}\\|`~!@#$%^&*()_+-=";
+  
   @Option(name = "-help", aliases = "-h", required = false, 
           usage = "Print this help text.")
   private boolean printHelp = false;
@@ -127,6 +136,26 @@ public class Crawler {
   }
   
   /**
+   * Get all nodes in a Jsoup DOM document (or other element) recursively in DFS order.
+   * 
+   * (Jsoup only provides methods to get all element nodes with 
+   * .getAllElements() or .select("*"); I wrote this method to get all
+   * nodes including element nodes AND text nodes.)
+   * 
+   * @param root document (or other element as the root)
+   * @return list of all nodes
+   */
+  static List<Node> getAllNodesDFS(Node root) {
+    List<Node> ret = new ArrayList<Node>();
+    ret.add(root);
+    List<Node> children = root.childNodes();
+    for (int i = 0; i < children.size(); ++i) {
+      ret.addAll(getAllNodesDFS(children.get(i)));
+    }
+    return ret;
+  }
+  
+  /**
    * Calculate the score of a link with respect to a list of given query terms
    * as well as the page context the URL is in.
    * 
@@ -158,6 +187,8 @@ public class Crawler {
     int count = 0;
     for (String term : queryTerms) {
       if(anchor.contains(term)) {
+        if (DEBUG) System.out.println(
+            "Found query term \"" + term + "\" in link anchor text.");
         count += 1;
       }
     }
@@ -168,11 +199,13 @@ public class Crawler {
     // Check for URL score
     for (String term : queryTerms) {
       if(url.contains(term)) {
+        if (DEBUG) System.out.println(
+            "Found query term \"" + term + "\" in link URL.");
         return URL_SCORE;
       }
     }
     
-    List<Node> allNodes = page.childNodes();  // Get all DOM nodes in the page
+    List<Node> allNodes = getAllNodesDFS(page);  // Get all DOM nodes in the page
     
     // Find the position of the link node in DOM
     int pos = 0;
@@ -196,19 +229,24 @@ public class Crawler {
       // Check for context words after the link
       int distance = 1;
       ListIterator<Node> itForward = allNodes.listIterator(pos);
+      if (itForward.hasNext()) itForward.next(); // Skip the link element node itself
+      for (int l = 0; l < ((Element) allNodes.get(pos)).textNodes().size(); ++l) {
+        // Skip through the text nodes of the link, i.e. the anchor text of the link itself.
+        if (itForward.hasNext()) itForward.next(); 
+      }
       LOOP_NODES:
       while (itForward.hasNext() && distance <= CONTEXT_SIZE) {
         Node node = itForward.next();
         if (! (node instanceof TextNode)) {
           continue LOOP_NODES;
         }
-        StringTokenizer st = new StringTokenizer(((TextNode) node).text().toLowerCase());
+        StringTokenizer st = new StringTokenizer(((TextNode) node).text().toLowerCase(), TOKEN_DELIM);
         while (st.hasMoreTokens() && distance <= CONTEXT_SIZE) {
           if (queryTerms[i].equals(st.nextToken())) {
             contextCount += 1;
             if (DEBUG) System.out.println(
-                "Found term " + queryTerms[i] + 
-                " at a distance of " + distance + " words after the link.");
+                "Found query term \"" + queryTerms[i] + 
+                "\" at a distance of " + distance + " words after the link.");
             continue LOOP_TERMS;
           }
           distance += 1;
@@ -224,7 +262,7 @@ public class Crawler {
         if (! (node instanceof TextNode)) {
           continue LOOP_NODES;
         }
-        StringTokenizer st = new StringTokenizer(((TextNode) node).text().toLowerCase());
+        StringTokenizer st = new StringTokenizer(((TextNode) node).text().toLowerCase(), TOKEN_DELIM);
         List<String> words = new ArrayList<String>();
         while (st.hasMoreTokens()) {
           words.add(st.nextToken());
@@ -233,8 +271,8 @@ public class Crawler {
           if (queryTerms[i].equals(words.get(k))) {
             contextCount += 1;
             if (DEBUG) System.out.println(
-                "Found term " + queryTerms[i] + 
-                " at a distance of " + distance + " words before the link.");
+                "Found query term \"" + queryTerms[i] + 
+                "\" at a distance of " + distance + " words before the link.");
             continue LOOP_TERMS;
           }
           distance += 1;
@@ -252,12 +290,12 @@ public class Crawler {
           continue LOOP_TERMS;
       }
       
-      StringTokenizer st = new StringTokenizer(page.text().toLowerCase());
+      StringTokenizer st = new StringTokenizer(page.text().toLowerCase(), TOKEN_DELIM);
       while (st.hasMoreTokens()) {
         if (queryTerms[i].equals(st.nextToken())) {
           pageCount += 1;
           if (DEBUG) System.out.println(
-              "Found term " + queryTerms[i] + " in page.");
+              "Found query term \"" + queryTerms[i] + "\" in the page outside of link.");
           continue LOOP_TERMS;
         }
       } // LOOP_WORDS
@@ -267,6 +305,8 @@ public class Crawler {
   }
   
   private void startCrawl() {
+    printDescription();
+      
     Queue<ScoredUrl> urlQueue = new PriorityQueue<ScoredUrl>(10, (a, b) -> b.score - a.score);
     Set<String> visited = new HashSet<String>();
     
@@ -278,11 +318,17 @@ public class Crawler {
       // Retrieve a page from the priority queue
       ScoredUrl scoredUrl = urlQueue.poll();
       
+      // Normalize the URL
+      httpToHttps(scoredUrl);
+      
+      // Skip if already visited
+      if (visited.contains(scoredUrl.url)) continue;
+      
       // Skip URL if it is not allowed to visit by robot
       if (! robotSafe(scoredUrl.url)) continue;
       
       // Download the page
-      if (trace) System.out.println("Downloading: " + scoredUrl.url + 
+      if (trace) System.out.println("\nDownloading: " + scoredUrl.url + 
                                     ". Score = " + scoredUrl.score);
       Document page = downloadPage(scoredUrl.url, downloadPath);
       if (page == null) continue; // This can happen if the link is invalid (eg. 404), 
@@ -300,18 +346,22 @@ public class Crawler {
         if (visited.contains(linkUrl)) return;
         
         // Score the link
-        if (DEBUG) System.out.println("Scoring link " + linkUrl + " in page " + scoredUrl.url);
+        if (DEBUG) System.out.println(" -- Scoring link " + linkUrl + " in the downloaded page.");
         int newScore = scoreLink(link, page, queryTerms);
         
         if (urlQueue.contains(new ScoredUrl(linkUrl, 0))) {
           // URL already exists in queue.
           // Find the existing URL in queue and add to its score.
+          // (Note with PriorityQueue, this needs to be implemented by
+          // inserting a new element with higher score.)
+          int[] previousScore = {0}; // Use wrapper trick to modify local variable in lambda expression
           urlQueue.forEach( existing -> {
             if (linkUrl.equals(existing.url)) {
-              existing.score += newScore;
-              if (trace) System.out.println("Adding " + newScore + " to score of " + linkUrl);
+              previousScore[0] = Math.max(previousScore[0], existing.score);
             }
           } );
+          urlQueue.offer(new ScoredUrl(linkUrl, previousScore[0] + newScore));
+          if (trace) System.out.println("Adding " + newScore + " to score of " + linkUrl);
         } else {
           // URL not already in queue.
           // Add the URL to queue.
@@ -384,6 +434,31 @@ public class Crawler {
   }
   
   /**
+   * Convert http to https.
+   * 
+   * @param scoredUrl link to convert
+   */
+  static void httpToHttps(ScoredUrl scoredUrl) {
+    String url = scoredUrl.url;
+    if (url.substring(0, 7).equals("http://")) {
+      scoredUrl.url = "https://" + url.substring(7);
+    }
+  }
+  
+  /**
+   * Prints the description text.
+   */
+  void printDescription() {
+    System.out.print("Crawling for " + maxPage + " pages relevant to \"");
+    for (int i = 0; i < queryTerms.length; ++i) {
+      if (i != 0) System.out.print(" ");
+      System.out.print(queryTerms[i]);
+    }
+    System.out.print("\" starting from " + startingUrl);
+    System.out.println();
+  }
+  
+  /**
    * Test if a URL allows robot according to the site's "robots.txt" file.
    * 
    * This method is modified from Mr. Davis's code at 
@@ -412,8 +487,6 @@ public class Crawler {
       return false;
     }
 
-    if (DEBUG) System.out.println("Checking robot protocol " + 
-                                   urlRobot.toString());
     String strCommands = new String();
     try (InputStream urlRobotStream = urlRobot.openStream()) {
       // read in entire file
@@ -428,7 +501,6 @@ public class Crawler {
         // if there is no robots.txt file, it is OK to search
         return true;
     }
-    if (DEBUG) System.out.println(strCommands);
 
     // assume that this robots.txt refers to us and 
     // search for "Disallow:" commands.
@@ -444,7 +516,8 @@ public class Crawler {
         break;
       
       String strBadPath = st.nextToken();
-
+      if (ROBOTSAFE_DEBUG) System.out.println(DISALLOW + " " + strBadPath);
+      
       // if the URL starts with a disallowed path, it is not safe
       if (strURL.indexOf(strBadPath) == 0)
         return false;
@@ -484,7 +557,6 @@ public class Crawler {
     status = crawler.parseArgs(args);
     if (status != 0) System.exit(status);
     crawler.startCrawl();
-    
   }
 
 }

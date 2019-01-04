@@ -318,8 +318,8 @@ public class Crawler {
       // Retrieve a page from the priority queue
       ScoredUrl scoredUrl = urlQueue.poll();
       
-      // Normalize the URL
-      toHttps(scoredUrl);
+      // Normalize the URL; if it is malformed, skip it
+      if (toHttps(scoredUrl) != 0) continue;
       
       // Skip if already visited
       if (visited.contains(scoredUrl.url)) continue;
@@ -440,15 +440,18 @@ public class Crawler {
    * Convert http to https.
    * 
    * @param scoredUrl link to convert
+   * @return status code. 0 for success.
    */
-  static void toHttps(ScoredUrl scoredUrl) {
+  static int toHttps(ScoredUrl scoredUrl) {
     String url = scoredUrl.url;
+    if (url.isEmpty()) return -1;
     if (! url.contains("://")) {
       scoredUrl.url = "https://" + url;
     }
     else if (url.substring(0, 7).equals("http://")) {
       scoredUrl.url = "https://" + url.substring(7);
     }
+    return 0;
   }
   
   /**

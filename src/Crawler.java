@@ -65,7 +65,7 @@ public class Crawler {
 
   @Option(name = "-query", aliases = "-q", required = false, 
           handler = StringArrayOptionHandler.class, usage = "List of query terms.")
-  private String[] queryTerms;
+  private String[] queryTerms = new String[0];
   
   @Option(name = "-max", aliases = "-m", required = false, 
       usage = "Maximum number of pages to crawl (default: 50).")
@@ -319,7 +319,7 @@ public class Crawler {
       ScoredUrl scoredUrl = urlQueue.poll();
       
       // Normalize the URL
-      httpToHttps(scoredUrl);
+      toHttps(scoredUrl);
       
       // Skip if already visited
       if (visited.contains(scoredUrl.url)) continue;
@@ -374,31 +374,34 @@ public class Crawler {
   
   /**
    * Download a page.
-   * @param url URL of the page.
+   * @param urlStr URL of the page.
    * @param downloadPath download save path
    * @return document object of the downloaded page; if downloading fails (eg. 404) return null
    */
-  private Document downloadPage(String url, Path downloadPath) {
+  private Document downloadPage(String urlStr, Path downloadPath) {
     // Download page content
+    URL url;
     Document page;
     try {
-      page = Jsoup.connect(url).maxBodySize(Integer.MAX_VALUE).get();
+      url = new URL(urlStr);
+      page = Jsoup.connect(urlStr).maxBodySize(Integer.MAX_VALUE).get();
     } catch (IOException e) {
       if (trace) System.out.println(
-          "Network error (eg. 404) when retrieving the page: " + url + ". Skipped this page.");
+          "Network error (eg. 404) when retrieving the page: " + urlStr + ". Skipped this page.");
       return null;
     }
     
     // Construct a file path to save the downloaded page
-    url = sanitizeFilename(url);
-    String filePath = downloadPath.toAbsolutePath() + "/" + url;
+    String relativePath = sanitizeFilename(url.getHost() + "/" + url.getFile());
+    String filePath = downloadPath.toAbsolutePath() + "/" + relativePath;
     Path finalPath = Paths.get(filePath).normalize();
     // If the URL is a directory, restore the "index.html" filename.
     // Otherwise the file will be stored without an extension;
     // this will cause collision between filename and directory name,
     // which are illegal to be the same in both Windows and Unix-like systems.
-    if (! finalPath.getFileName().toString().contains(".")) {
-      finalPath = Paths.get(filePath + "index.html");
+    String filename = finalPath.getFileName().toString();
+    if (! filename.contains(".") || filename.equals(url.getHost())) {
+      finalPath = Paths.get(filePath + "/index.html");
     }
     
     // Test if the parent directories of the constructed path exists; if not, create them
@@ -438,9 +441,12 @@ public class Crawler {
    * 
    * @param scoredUrl link to convert
    */
-  static void httpToHttps(ScoredUrl scoredUrl) {
+  static void toHttps(ScoredUrl scoredUrl) {
     String url = scoredUrl.url;
-    if (url.substring(0, 7).equals("http://")) {
+    if (! url.contains("://")) {
+      scoredUrl.url = "https://" + url;
+    }
+    else if (url.substring(0, 7).equals("http://")) {
       scoredUrl.url = "https://" + url.substring(7);
     }
   }

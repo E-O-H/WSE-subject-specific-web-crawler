@@ -309,7 +309,8 @@ public class Crawler {
     printDescription();
       
     Queue<ScoredUrl> urlQueue = new PriorityQueue<ScoredUrl>(10, (a, b) -> b.score - a.score);
-    Set<String> visited = new HashSet<String>();
+    Set<String> visited = new HashSet<String>();    // This set stores visited URLs
+    Set<String> visitedCSS = new HashSet<String>(); // I use a separate set to store visited CSS files
     
     // Add starting URL
     urlQueue.offer(new ScoredUrl(startingUrl, 0));
@@ -337,6 +338,9 @@ public class Crawler {
       if (trace) System.out.println("Received: " + scoredUrl.url);
       visited.add(scoredUrl.url);
       if (visited.size() >= maxPage) break;
+      
+      // Download CSS files associated with the page
+      downloadCSS(page, downloadPath, visitedCSS);
       
       // Get all links in the retrieved page
       Elements links = page.select("a[href]");
@@ -429,6 +433,23 @@ public class Crawler {
     }
     
     return page;
+  }
+  
+  /**
+   * Downloads CSS files associated with a page
+   * 
+   * @param page the page
+   * @param downloadPath download save path
+   */
+  void downloadCSS(Document page, Path downloadPath, Set<String> visitedCSS) {
+    Elements links = page.select("link[rel=\"stylesheet\"][href]");
+    links.forEach( link -> {
+      String linkUrl = link.attr("abs:href"); // The "abs:" attribute prefix is used to automatically 
+                                              // resolve an absolute URL if the link is a relative URL
+      if (visitedCSS.contains(linkUrl)) return;
+      visitedCSS.add(linkUrl);
+      downloadPage(linkUrl, downloadPath);
+    } );
   }
   
   /**

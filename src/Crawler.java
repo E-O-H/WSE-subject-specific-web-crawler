@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.ListIterator;
 import java.util.PriorityQueue;
 
+import org.jsoup.Connection;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -379,12 +380,22 @@ public class Crawler {
    * @return document object of the downloaded page; if downloading fails (eg. 404) return null
    */
   private Document downloadPage(String urlStr, Path downloadPath) {
+    final String USER_AGENT = "Java";
+    final String REFERRER = "https://www.mytestsite.com";
+    
     // Download page content
     URL url;
     Document page;
     try {
       url = new URL(urlStr);
-      page = Jsoup.connect(urlStr).maxBodySize(Integer.MAX_VALUE).get();
+      Connection.Response response = Jsoup.connect(urlStr)
+                                          .method(Connection.Method.GET)
+                                          .followRedirects(true)
+                                          .userAgent(USER_AGENT)
+                                          .referrer(REFERRER)
+                                          .maxBodySize(Integer.MAX_VALUE)
+                                          .execute();
+      page = response.parse();
     } catch (IOException e) {
       if (trace) System.out.println(
           "Network error (eg. 404) when retrieving the page: " + urlStr + ". Skipped this page.");
